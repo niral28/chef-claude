@@ -33,10 +33,29 @@ _current_room: rtc.Room | None = None
 # Ring buffer of recent video frames (captures ~2 FPS, keeps last 3)
 _frame_buffer: deque[rtc.VideoFrame] = deque(maxlen=3)
 
-PROFILES_DIR = Path("user_profiles")
-PROFILES_DIR.mkdir(exist_ok=True)
-GROCERY_DIR = Path("grocery_lists")
-GROCERY_DIR.mkdir(exist_ok=True)
+STORAGE_BACKEND = os.environ.get("STORAGE_BACKEND", "local").lower()
+
+# --- Storage layer ---
+# Set STORAGE_BACKEND=redis and UPSTASH_REDIS_URL for cloud deploys.
+# Defaults to local JSON files for dev.
+
+_redis_client = None
+
+def _get_redis():
+    global _redis_client
+    if _redis_client is None:
+        import redis as _redis
+        url = os.environ.get("UPSTASH_REDIS_URL", "")
+        if not url:
+            raise RuntimeError("UPSTASH_REDIS_URL env var required when STORAGE_BACKEND=redis")
+        _redis_client = _redis.from_url(url, decode_responses=True)
+    return _redis_client
+
+if STORAGE_BACKEND == "local":
+    PROFILES_DIR = Path("user_profiles")
+    PROFILES_DIR.mkdir(exist_ok=True)
+    GROCERY_DIR = Path("grocery_lists")
+    GROCERY_DIR.mkdir(exist_ok=True)
 
 # Context management settings
 MAX_CHAT_ITEMS = 40
@@ -365,6 +384,9 @@ def _format_profile(profile: dict) -> str:
 
 
 def load_profile(user_id: str) -> dict | None:
+    if STORAGE_BACKEND == "redis":
+        data = _get_redis().get(f"profile:{user_id}")
+        return json.loads(data) if data else None
     path = PROFILES_DIR / f"{user_id}.json"
     if path.exists():
         return json.loads(path.read_text())
@@ -372,11 +394,17 @@ def load_profile(user_id: str) -> dict | None:
 
 
 def save_profile(user_id: str, profile: dict) -> None:
+    if STORAGE_BACKEND == "redis":
+        _get_redis().set(f"profile:{user_id}", json.dumps(profile))
+        return
     path = PROFILES_DIR / f"{user_id}.json"
     path.write_text(json.dumps(profile, indent=2))
 
 
 def load_grocery_list(user_id: str) -> list[dict]:
+    if STORAGE_BACKEND == "redis":
+        data = _get_redis().get(f"grocery:{user_id}")
+        return json.loads(data) if data else []
     path = GROCERY_DIR / f"{user_id}.json"
     if path.exists():
         return json.loads(path.read_text())
@@ -384,6 +412,9 @@ def load_grocery_list(user_id: str) -> list[dict]:
 
 
 def save_grocery_list(user_id: str, items: list[dict]) -> None:
+    if STORAGE_BACKEND == "redis":
+        _get_redis().set(f"grocery:{user_id}", json.dumps(items))
+        return
     path = GROCERY_DIR / f"{user_id}.json"
     path.write_text(json.dumps(items, indent=2))
 
