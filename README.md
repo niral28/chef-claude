@@ -1,6 +1,6 @@
 # Chef Claude 
 
-A personal five star Michelin Chef at your finger tips - get familiar with cooking, improve your skills, and experiment with dishes you never you even thought of! 
+A personal five star Michelin Chef at your finger tips - get familiar with cooking, improve your skills, and experiment with dishes you never even thought of! 
 
 [Youtube Video](https://youtu.be/PoUAx3hAJFg?si=kZXMeqTFWMl42lDd)
 
