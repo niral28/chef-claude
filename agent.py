@@ -788,8 +788,14 @@ class RecipeAgent(Agent):
 
 
 async def _capture_video_frames(room: rtc.Room) -> None:
-    """Background task that captures the latest video frame from any participant's camera."""
-    global _latest_video_frame
+    """Background task that captures the latest video frame from any participant's camera.
+
+    Uses a two-task pattern: a fast reader drains the VideoStream into a single
+    'latest frame' slot, and a slower sampler copies that frame into the ring
+    buffer at ~2 FPS.  This ensures we always have the most recent frame
+    regardless of stream throughput.
+    """
+    _latest_frame: dict[str, rtc.VideoFrame | None] = {"frame": None}
 
     while True:
         # Wait for a participant with a video track
@@ -804,17 +810,41 @@ async def _capture_video_frames(room: rtc.Room) -> None:
 
         if video_track is None:
             _frame_buffer.clear()
+            _latest_frame["frame"] = None
             await asyncio.sleep(1)
             continue
 
+        stream: rtc.VideoStream | None = None
+        reader_task: asyncio.Task | None = None
         try:
             stream = rtc.VideoStream(video_track)
-            async for event in stream:
-                _frame_buffer.append(event.frame)
-                # ~2 FPS — buffer holds last 3 frames (~1.5 sec window)
+
+            # Fast reader: drains every frame, always keeps the latest
+            async def _drain():
+                async for event in stream:
+                    _latest_frame["frame"] = event.frame
+
+            reader_task = asyncio.create_task(_drain())
+
+            # Sampler: grab the latest frame at ~2 FPS into the ring buffer
+            while not reader_task.done():
+                if _latest_frame["frame"] is not None:
+                    _frame_buffer.append(_latest_frame["frame"])
                 await asyncio.sleep(0.5)
+
         except Exception:
+            logger.debug("Video capture interrupted, restarting...")
+        finally:
+            if reader_task and not reader_task.done():
+                reader_task.cancel()
+                try:
+                    await reader_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if stream is not None:
+                await stream.aclose()
             _frame_buffer.clear()
+            _latest_frame["frame"] = None
             await asyncio.sleep(1)
 
 
